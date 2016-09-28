@@ -7,6 +7,13 @@ use 5.010001;
 use strict;
 use warnings;
 
+BEGIN {
+    # this is a temporary trick to let Data::Sah use Scalar::Util::Numeric::PP
+    # (SUNPP) instead of Scalar::Util::Numeric (SUN). SUNPP allows bigints while
+    # SUN currently does not.
+    $ENV{DATA_SAH_CORE_OR_PP} = 1;
+}
+
 our %SPEC;
 
 $SPEC{primes} = {
@@ -21,16 +28,12 @@ _
     args => {
         start => {
             schema => 'int*',
-            req => 1,
             pos => 0,
+            default => 2,
         },
         stop => {
             schema => 'int*',
             pos => 1,
-        },
-        bigint => {
-            summary => 'Turn on bigint support',
-            schema => 'bool',
         },
     },
     examples => [
@@ -52,6 +55,12 @@ _
             src_plang => 'bash',
             'x.doc.max_result_lines' => 8,
         },
+        {
+            summary => 'Bigint support',
+            src => '[[prog]] 18446744073709551616 18446744073709552000',
+            src_plang => 'bash',
+            'x.doc.max_result_lines' => 8,
+        },
     ],
     links => [
         {url => 'prog:primes'},
@@ -65,10 +74,20 @@ sub primes {
 
     my $start = $args{start} // 2;
     my $stop  = $args{stop};
+    my $bigint = do {
+        # a method to check for the availability of 64bit integer, from:
+        # http://www.perlmonks.org/?node_id=732199
+        use bigint;
+        if (eval { pack("Q", 65) }) {
+            $start > 18446744073709551615;
+        } else {
+            $start > 4294967295;
+        }
+    };
 
     if (defined $stop) {
         my @res;
-        if ($args{bigint}) {
+        if ($bigint) {
             use bigint;
             my $n = $start-1;
             while (1) {
@@ -91,21 +110,28 @@ sub primes {
                 }
             }
         }
+
+        # convert Math::BigInt objects into ints first, so the CLI formatter
+        # detects it as simple aos
+        for (@res) { $_ = $_->bstr if ref($_) eq 'Math::BigInt' }
+
         return [200, "OK", \@res];
     } else {
         # stream
         my $func;
-        if ($args{bigint}) {
+        if ($bigint) {
             use bigint;
             my $n = $start-1;
             $func = sub {
                 $n = Math::Prime::Util::next_prime($n);
+                return ref($n) eq 'Math::BigInt' ? $n->bstr : $n;
             };
         } else {
             # XXX how to avoid code duplicate?
             my $n = $start-1;
             $func = sub {
                 $n = Math::Prime::Util::next_prime($n);
+                return ref($n) eq 'Math::BigInt' ? $n->bstr : $n;
             };
         }
         return [200, "OK", $func, {stream=>1}];
@@ -117,9 +143,7 @@ sub primes {
 
 =head1 DESCRIPTION
 
-TODO: transparent bigint support (without having user specify `--bigint`).
 
-
-=head1 SEE ALSO
+=head1 prepend:SEE ALSO
 
 L<Math::Prime::Util>
